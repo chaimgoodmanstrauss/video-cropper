@@ -1,0 +1,257 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Video Cropper</title>
+<style>
+  /* follow the system light/dark setting; controls use the native theme */
+  :root { color-scheme: light dark;
+          --bg:#f2f2f2; --fg:#222; --bar:#e2e2e2; --ok:#2a7a36; --err:#b42020; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#222; --fg:#ddd; --bar:#111; --ok:#9c9; --err:#f88; }
+  }
+  body { margin:0; font:14px system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+  #bar { padding:8px 12px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; background:var(--bar); }
+  button { font:inherit; padding:5px 12px; }
+  input[type=number] { width:64px; font:inherit; }
+  #msg { color:var(--ok); white-space:pre-wrap; }
+  #msg.err { color:var(--err); }
+  #stage { position:relative; display:inline-block; margin:12px; user-select:none; }
+  #img { display:block; }   /* size set by zoom */
+  /* gray-out lives in a clipped layer; the box + handles are NOT clipped, so
+     marks on the picture's edge stick out into the margin and stay grabbable */
+  #clip { position:absolute; inset:0; overflow:hidden; pointer-events:none; }
+  #shade { position:absolute; box-shadow:0 0 0 9999px rgba(110,110,110,.7); }
+  #box { position:absolute; outline:1px solid rgba(255,255,255,.35); cursor:move; }
+  /* edges: invisible 12px-thick grab strips along each whole side */
+  .edge { position:absolute; }
+  .edge.n, .edge.s { left:0; right:0; height:12px; }
+  .edge.e, .edge.w { top:0; bottom:0; width:12px; }
+  .edge.n { top:-6px; } .edge.s { bottom:-6px; } .edge.w { left:-6px; } .edge.e { right:-6px; }
+  /* corners: 18px hit area, small faint dot */
+  .hd { position:absolute; width:18px; height:18px; margin:-9px 0 0 -9px; z-index:1; }
+  .hd::after { content:""; position:absolute; left:6px; top:6px; width:6px; height:6px; border-radius:50%;
+               background:rgba(255,255,255,.45); opacity:.6; transition:opacity .15s; }
+  #box:hover .hd::after, .hd:hover::after { opacity:1; }
+  #cancel { margin-left:12px; padding:2px 10px; font-size:13px; }
+  #status { display:none; padding:10px 14px; font-size:16px; font-weight:600; }
+  #status.busy { display:block; background:#334; color:#fff; }
+  #status.done { display:block; background:#1b6e2a; color:#fff; }
+  #status.fail { display:block; background:#7a1f1f; color:#fff; }
+  #prog { width:100%; height:10px; margin-top:6px; display:none; }
+  #status.busy #prog { display:block; }
+</style></head>
+<body>
+<div id="bar">
+  <button id="open">Open…</button>
+  <input id="file" type="file" accept=".mp4,.mov,.m4v,video/mp4,video/quicktime" hidden>
+  <button id="ccw" disabled title="Rotate counter-clockwise">⟲ CCW</button>
+  <button id="cw" disabled title="Rotate clockwise">⟳ CW</button>
+  <span><button id="zout" title="Zoom out">−</button><button id="zfit" title="Fit to window">Fit</button><button id="zin" title="Zoom in">+</button>
+        <span id="zl"></span></span>
+  <span>x <input id="x" type="number"> y <input id="y" type="number">
+        w <input id="w" type="number"> h <input id="h" type="number"></span>
+  <span id="rot"></span>
+  <span id="dims"></span>
+  <span title="Output pixel size. Scaling is always uniform: change either number and the other follows.">
+    output <input id="ow" type="number" min="2"> × <input id="oh" type="number" min="2"> px
+    <span id="opct"></span> <button id="ofull" title="Back to the crop's full pixel size">1:1</button></span>
+  <label><input type="checkbox" id="mute"> Remove sound</label>
+  <button id="save" disabled>Save crop…</button>
+  <span id="msg"></span>
+</div>
+<div id="status"><span id="stxt"></span><button id="cancel" hidden>Cancel render</button><progress id="prog" max="1" value="0"></progress></div>
+<div id="stage" hidden><img id="img"><div id="clip"><div id="shade"></div></div><div id="box"></div></div>
+<script>
+const $ = id => document.getElementById(id);
+const img = $('img'), box = $('box'), stage = $('stage');
+let W = 0, H = 0, r = {x:0, y:0, w:0, h:0};   // r in source pixels
+
+const cursors = {nw:'nwse',se:'nwse',ne:'nesw',sw:'nesw',n:'ns',s:'ns',e:'ew',w:'ew'};
+for (const k of ['n','e','s','w']) {          // whole-side grab strips
+  const d = document.createElement('div'); d.className = 'edge ' + k; d.dataset.h = k;
+  d.style.cursor = cursors[k] + '-resize'; box.appendChild(d);
+}
+for (const k of ['nw','ne','se','sw']) {      // corner handles
+  const d = document.createElement('div'); d.className = 'hd'; d.dataset.h = k;
+  d.style.cursor = cursors[k] + '-resize';
+  d.style.left = k.includes('w') ? '0' : '100%';
+  d.style.top  = k.includes('n') ? '0' : '100%';
+  box.appendChild(d);
+}
+
+function msg(t, err) { $('msg').textContent = t; $('msg').className = err ? 'err' : ''; }
+const scale = () => img.clientWidth / W;
+
+function clamp() {
+  r.w = Math.max(2, Math.min(Math.round(r.w), W));
+  r.h = Math.max(2, Math.min(Math.round(r.h), H));
+  r.x = Math.max(0, Math.min(Math.round(r.x), W - r.w));
+  r.y = Math.max(0, Math.min(Math.round(r.y), H - r.h));
+}
+function draw() {
+  clamp();
+  const s = scale();
+  const g = {left:r.x*s+'px', top:r.y*s+'px', width:r.w*s+'px', height:r.h*s+'px'};
+  Object.assign(box.style, g); Object.assign($('shade').style, g);
+  for (const k of 'xywh') if (document.activeElement !== $(k)) $(k).value = r[k];
+  const o = outSize();
+  for (const k of ['ow','oh']) if (document.activeElement !== $(k)) $(k).value = o[k];
+  $('opct').textContent = `(${(o.ow * o.oh / 1e6).toFixed(2)} MP, ${Math.round(f * 100)}%)`;
+  $('dims').textContent = `source ${W}×${H} → crop=${r.w}:${r.h}:${r.x}:${r.y}`;
+}
+// output pixel size: uniform scale factor f (≤ 1, only shrinking) applied to the crop
+let f = 1;
+function outSize() {   // even numbers, for H.264
+  const ev = v => Math.max(2, Math.floor(v / 2) * 2);
+  return {ow: ev(r.w * f), oh: ev(r.h * f)};
+}
+$('ow').addEventListener('input', () => { f = Math.min(1, Math.max(0.001, (+$('ow').value || 2) / r.w)); draw(); });
+$('oh').addEventListener('input', () => { f = Math.min(1, Math.max(0.001, (+$('oh').value || 2) / r.h)); draw(); });
+for (const k of ['ow','oh']) $(k).addEventListener('change', () => draw());   // tidy the box on commit
+$('ofull').onclick = () => { f = 1; draw(); };
+for (const k of 'xywh') $(k).addEventListener('input', () => { r[k] = +$(k).value || 0; draw(); });
+// zoom: null = fit to window (default); otherwise a fixed scale factor
+let zoom = null;
+function fitZoom() {
+  const top = stage.getBoundingClientRect().top;
+  const aw = document.documentElement.clientWidth - 24, ah = innerHeight - top - 12;
+  return Math.max(0.02, Math.min(1, aw / W, ah / H));
+}
+function applyZoom() {
+  if (!W) return;
+  const z = zoom ?? fitZoom();
+  img.style.width = W * z + 'px'; img.style.height = H * z + 'px';
+  $('zl').textContent = Math.round(z * 100) + '%' + (zoom == null ? ' (fit)' : '');
+  draw();
+}
+const cur = () => zoom ?? fitZoom();
+$('zout').onclick = () => { zoom = Math.max(0.02, cur() / 1.25); applyZoom(); };
+$('zin').onclick  = () => { zoom = Math.min(8, cur() * 1.25); applyZoom(); };
+$('zfit').onclick = () => { zoom = null; applyZoom(); };
+window.addEventListener('resize', () => W && applyZoom());
+
+// dragging: move box, resize via handles, or draw a new box on empty area
+let drag = null;
+stage.addEventListener('pointerdown', e => {
+  if (!W) return;
+  const s = scale(), b = img.getBoundingClientRect();
+  const px = (e.clientX - b.left) / s, py = (e.clientY - b.top) / s;
+  const h = e.target.dataset.h;
+  if (h) drag = {mode:h};
+  else if (e.target === box) drag = {mode:'move'};
+  else { r = {x:px, y:py, w:2, h:2}; drag = {mode:'se'}; }
+  drag.px = px; drag.py = py; drag.r0 = {...r};
+  stage.setPointerCapture(e.pointerId); e.preventDefault();
+});
+stage.addEventListener('pointermove', e => {
+  if (!drag) return;
+  const s = scale(), b = img.getBoundingClientRect();
+  const dx = (e.clientX - b.left) / s - drag.px, dy = (e.clientY - b.top) / s - drag.py;
+  const o = drag.r0, m = drag.mode;
+  if (m === 'move') { r.x = o.x + dx; r.y = o.y + dy; r.w = o.w; r.h = o.h; }
+  else {
+    let x1 = o.x, y1 = o.y, x2 = o.x + o.w, y2 = o.y + o.h;
+    if (m.includes('w')) x1 = Math.min(Math.max(0, x1 + dx), x2 - 2);
+    if (m.includes('e')) x2 = Math.max(Math.min(W, x2 + dx), x1 + 2);
+    if (m.includes('n')) y1 = Math.min(Math.max(0, y1 + dy), y2 - 2);
+    if (m.includes('s')) y2 = Math.max(Math.min(H, y2 + dy), y1 + 2);
+    r = {x:x1, y:y1, w:x2 - x1, h:y2 - y1};
+  }
+  draw();
+});
+stage.addEventListener('pointerup', () => drag = null);
+
+async function post(path, body) {
+  const res = await fetch(path, {method:'POST', body: JSON.stringify(body || {})});
+  return res.json();
+}
+
+$('open').onclick = () => { $('file').value = ''; $('file').click(); };
+
+function upload(file) {   // stream the chosen file to the local server, with progress
+  return new Promise((ok, fail) => {
+    const x = new XMLHttpRequest();
+    x.open('POST', '/upload');
+    x.setRequestHeader('X-Name', encodeURIComponent(file.name));
+    x.upload.onprogress = e => { if (e.lengthComputable) {
+      $('prog').value = e.loaded / e.total;
+      status('busy', `Loading ${file.name}… ${Math.round(100 * e.loaded / e.total)}%`); } };
+    x.onload = () => ok(JSON.parse(x.responseText));
+    x.onerror = () => fail(new Error('upload failed'));
+    x.send(file);
+  });
+}
+
+$('file').onchange = async () => {
+  const file = $('file').files[0];
+  if (!file) return;
+  msg(''); document.title = 'Video Cropper';
+  $('prog').value = 0; status('busy', `Loading ${file.name}…`);
+  for (const b of ['save','open','cw','ccw']) $(b).disabled = true;
+  let j;
+  try {
+    j = await post('/locate', {name: file.name, size: file.size, mtime: file.lastModified});
+    if (!j.found && !j.error) j = await upload(file);
+  }
+  catch (e) { j = {error: e.message}; }
+  finally { $('open').disabled = false; }
+  status('');
+  if (j.error) { if (W) for (const b of ['save','cw','ccw']) $(b).disabled = false; return msg(j.error, true); }
+  img.onload = () => {
+    W = img.naturalWidth; H = img.naturalHeight;
+    stage.hidden = false; $('rot').textContent = '';
+    for (const b of ['save','cw','ccw']) $(b).disabled = false;
+    r = {x:200, y:0, w:W - 400, h:H};   // default: crop=iw-400:ih, centred
+    if (r.w < 2) r = {x:0, y:0, w:W, h:H};
+    f = 1; zoom = null; applyZoom(); msg(j.src);
+  };
+  img.src = '/frame.jpg?' + Date.now();
+};
+
+async function rotate(turn) {   // turn: 1 = CW, -1 = CCW
+  const j = await post('/rotate', {turn});
+  if (j.error) return msg(j.error, true);
+  // map the crop box onto the rotated frame so it stays on the same content
+  r = turn > 0 ? {x: H - r.y - r.h, y: r.x, w: r.h, h: r.w}
+               : {x: r.y, y: W - r.x - r.w, w: r.h, h: r.w};
+  img.onload = () => { W = img.naturalWidth; H = img.naturalHeight; applyZoom();
+    $('rot').textContent = j.rot ? `rotated ${j.rot * 90}° CW` : ''; };
+  img.src = '/frame.jpg?' + Date.now();
+}
+$('cw').onclick = () => rotate(1);
+$('ccw').onclick = () => rotate(-1);
+
+$('save').onclick = async () => {
+  clamp();
+  msg('');
+  status('busy', 'Choose where to save…');
+  $('prog').removeAttribute('value');            // indeterminate until ffmpeg reports
+  for (const b of ['save','open','cw','ccw']) $(b).disabled = true;
+  const poll = setInterval(async () => {
+    const s = await (await fetch('/status')).json();
+    if (s.progress != null) {
+      $('prog').value = s.progress;
+      status('busy', `Rendering… ${Math.round(s.progress * 100)}%`); $('cancel').hidden = false;
+      document.title = `${Math.round(s.progress * 100)}% – Video Cropper`;
+    }
+  }, 400);
+  try {
+    const j = await post('/save', {...r, ...outSize(), mute: $('mute').checked});
+    if (j.aborted) status('fail', 'Render cancelled.');
+    else if (j.cancelled) status('');
+    else if (j.error) status('fail', '✗ ffmpeg failed:\n' + j.error);
+    else { status('done', `✓ Saved: ${j.out}   (${j.filter})`); document.title = '✓ Saved – Video Cropper'; return; }
+    document.title = 'Video Cropper';
+  } finally {
+    clearInterval(poll); $('cancel').hidden = true;
+    for (const b of ['save','open','cw','ccw']) $(b).disabled = false;
+  }
+};
+
+$('cancel').onclick = () => { $('cancel').hidden = true; post('/cancel'); };
+
+function status(cls, text) {
+  $('status').className = cls || '';
+  $('stxt').textContent = text || '';
+  $('stxt').style.whiteSpace = 'pre-wrap';
+}
+</script>
+</body></html>

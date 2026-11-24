@@ -1,0 +1,70 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Video Cropper</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Crop, rotate, shrink and mute videos. Runs entirely in your browser; nothing is uploaded.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<meta name="theme-color" content="#2b2b2b">
+<style>
+  /* follow the system light/dark setting; controls use the native theme */
+  :root { color-scheme: light dark;
+          --bg:#f2f2f2; --fg:#222; --bar:#e2e2e2; --ok:#2a7a36; --err:#b42020; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#222; --fg:#ddd; --bar:#111; --ok:#9c9; --err:#f88; }
+  }
+  body { margin:0; font:14px system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+  #bar { padding:8px 12px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; background:var(--bar); }
+  button { font:inherit; padding:5px 12px; }
+  input[type=number] { width:64px; font:inherit; }
+  #msg { color:var(--ok); white-space:pre-wrap; }
+  #msg.err { color:var(--err); }
+  #note { font-size:12px; opacity:.7; padding:4px 12px; }
+  #stage { position:relative; display:inline-block; margin:12px; user-select:none; }
+  #img { display:block; }   /* size set by zoom */
+  /* gray-out lives in a clipped layer; the box + handles are NOT clipped, so
+     marks on the picture's edge stick out into the margin and stay grabbable */
+  #clip { position:absolute; inset:0; overflow:hidden; pointer-events:none; }
+  #shade { position:absolute; box-shadow:0 0 0 9999px rgba(110,110,110,.7); }
+  #box { position:absolute; outline:1px solid rgba(255,255,255,.35); cursor:move; }
+  /* edges: invisible 12px-thick grab strips along each whole side */
+  .edge { position:absolute; }
+  .edge.n, .edge.s { left:0; right:0; height:12px; }
+  .edge.e, .edge.w { top:0; bottom:0; width:12px; }
+  .edge.n { top:-6px; } .edge.s { bottom:-6px; } .edge.w { left:-6px; } .edge.e { right:-6px; }
+  /* corners: 18px hit area, small faint dot */
+  .hd { position:absolute; width:18px; height:18px; margin:-9px 0 0 -9px; z-index:1; }
+  .hd::after { content:""; position:absolute; left:6px; top:6px; width:6px; height:6px; border-radius:50%;
+               background:rgba(255,255,255,.45); opacity:.6; transition:opacity .15s; }
+  #box:hover .hd::after, .hd:hover::after { opacity:1; }
+  #cancel { margin-left:12px; padding:2px 10px; font-size:13px; }
+  #status { display:none; padding:10px 14px; font-size:16px; font-weight:600; }
+  #status.busy { display:block; background:#334; color:#fff; }
+  #status.done { display:block; background:#1b6e2a; color:#fff; }
+  #status.fail { display:block; background:#7a1f1f; color:#fff; }
+  #prog { width:100%; height:10px; margin-top:6px; display:none; }
+  #status.busy #prog { display:block; }
+</style></head>
+<body>
+<div id="bar">
+  <button id="open">Open…</button>
+  <input id="file" type="file" accept=".mp4,.mov,.m4v,video/mp4,video/quicktime" hidden>
+  <button id="ccw" disabled title="Rotate counter-clockwise">⟲ CCW</button>
+  <button id="cw" disabled title="Rotate clockwise">⟳ CW</button>
+  <span><button id="zout" title="Zoom out">−</button><button id="zfit" title="Fit to window">Fit</button><button id="zin" title="Zoom in">+</button>
+        <span id="zl"></span></span>
+  <span>x <input id="x" type="number"> y <input id="y" type="number">
+        w <input id="w" type="number"> h <input id="h" type="number"></span>
+  <span id="rot"></span>
+  <span id="dims"></span>
+  <span title="Output pixel size. Scaling is always uniform: change either number and the other follows.">
+    output <input id="ow" type="number" min="2"> × <input id="oh" type="number" min="2"> px
+    <span id="opct"></span> <button id="ofull" title="Back to the crop's full pixel size">1:1</button></span>
+  <label><input type="checkbox" id="mute"> Remove sound</label>
+  <button id="save" disabled>Save crop…</button>
+  <span id="msg"></span>
+</div>
+<div id="status"><span id="stxt"></span><button id="cancel" hidden>Cancel render</button><progress id="prog" max="1" value="0"></progress></div>
+<div id="note">Runs entirely on this computer — the video is never uploaded.</div>
+<div id="stage" hidden><img id="img"><div id="clip"><div id="shade"></div></div><div id="box"></div></div>
+<script type="module" src="app.js"></script>
+</body></html>

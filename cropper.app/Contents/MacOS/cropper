@@ -1,0 +1,10 @@
+#!/bin/bash
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+NAME="$(basename "$0")"
+RES="$(cd "$(dirname "$0")/../Resources" && pwd)"
+LOG="$HOME/Library/Logs/$NAME.log"
+exec >>"$LOG" 2>&1
+echo "=== $(date) ==="
+cd "$HOME"
+S="$RES/script"
+if [ "$(head -c2 "$S")" = "#!" ]; then exec "$S" "$@"; else exec /bin/bash "$S" "$@"; fi
