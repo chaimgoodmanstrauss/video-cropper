@@ -13,18 +13,16 @@ export async function open(file) {
   if (!track) throw new Error('No video track found in this file.');
   if (!(await track.canDecode()))
     throw new Error(`This browser can't decode the video codec (${track.codec || 'unknown'}).`);
-  const start = await track.getFirstTimestamp();
-  const dur = await input.computeDuration();
-  return { input, track, start, dur };
+  const start = await track.getFirstTimestamp();   // no duration scan: it can read the whole file
+  return { input, track, start };
 }
 
-/** A still frame (≈1 s in, like the Python version) with `rot` extra quarter turns clockwise.
+/** A still frame (the first one: no long decode from a keyframe) with `rot` extra quarter turns clockwise.
  *  Returns {blob, width, height} in display pixels after rotation. */
 export async function preview(v, rot = 0) {
   const rotation = (v.track.rotation + 90 * rot) % 360;
   const sink = new CanvasSink(v.track, { rotation });
-  const t = v.start + Math.min(1, Math.max(0, (v.dur - v.start) / 2));
-  const fr = (await sink.getCanvas(t)) || (await sink.getCanvas(v.start));
+  const fr = await sink.getCanvas(v.start);
   if (!fr) throw new Error('Could not read a frame from this video.');
   const c = fr.canvas;
   const blob = c.convertToBlob ? await c.convertToBlob({ type: 'image/jpeg', quality: 0.92 })

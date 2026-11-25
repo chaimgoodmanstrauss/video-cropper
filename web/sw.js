@@ -1,5 +1,5 @@
 // Offline support: network first (so a redeploy shows up immediately), cache as fallback.
-const CACHE = 'vcrop-v1';
+const CACHE = 'vcrop-v2';
 const SHELL = ['./', 'index.html', 'app.js', 'engine.js', 'vendor/mediabunny-1.65.2.min.mjs',
                'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
 self.addEventListener('install', e => {

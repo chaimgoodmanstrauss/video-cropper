@@ -1,1 +1,1 @@
-{"name":"Video Cropper","cat":"Utilities","icon":"crop","desc":"Crop, rotate, shrink and mute videos. Runs entirely in your browser; nothing is uploaded.","path":"videocropper/","live":true}
+{"name": "Video Cropper", "cat": "Utilities", "icon": "crop", "desc": "Crop, rotate, shrink and mute videos. Runs entirely in your browser; nothing is uploaded.", "path": "videocropper/", "live": true, "img": "icons/crop.jpg"}
